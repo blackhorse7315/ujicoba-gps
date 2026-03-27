@@ -452,12 +452,7 @@
         </div>
         
         <div class="absolute bottom-6 right-4 z-[400] flex flex-col gap-3">
-            <button id="btn-focus-mode" onclick="toggleRouteFocus()" title="Focus Active Route" class="bg-aviation-panel p-2.5 rounded-full shadow-lg border border-slate-600 text-slate-300 hover:text-aviation-primary transition">
-                <i class="fa-solid fa-route"></i>
-            </button>
-            <button onclick="toggleMapLayer()" class="bg-aviation-panel p-2.5 rounded-full shadow-lg border border-slate-600 text-slate-300 hover:text-aviation-primary transition">
-                <i class="fa-solid fa-layer-group"></i>
-            </button>
+            <button onclick="toggleMapLayer()" class="bg-slate-800 p-2.5 rounded-full shadow-lg border border-slate-600 text-slate-300 hover:text-aviation-primary transition"><i class="fa-solid fa-layer-group"></i></button>
         </div>
     </div>
 
@@ -580,16 +575,14 @@
         let savedRoutes = [];
         let activeRouteIds = [];
         let selectedRouteWaypointId = null;
-        let loadedRouteId = null;
+        let loadedRouteId = null; // Track current loaded route ID
         
         let map, mapMarkers = [], routePolyline = null, midpointMarkers = [];
         
         let isSimulating = false, simMarker = null, simInterval = null, simLegIndex = 0, simProgress = 0, simSpeedMultiplier = 1, lastSimTime = 0;
         let isGpsNavigating = false, gpsWatchId = null, gpsMarker = null, lastGpsHeading = 0;
         
-        let isMapAutoTracking = true, mapOrientation = 'north', googleHybrid, googleStreets, googleTerrain, currentMapLayer = 'hybrid';
-        let isRouteFocusMode = false;
-        
+        let isMapAutoTracking = true, mapOrientation = 'north', googleHybrid, googleStreets, currentMapLayer = 'hybrid';
         let searchDebounceTimer;
         let pendingRouteInsertIndex = null, editingAircraftId = null, editingWaypointId = null, tempLat = 0, tempLng = 0;
 
@@ -699,18 +692,12 @@
             map = L.map('map', { zoomControl: false, attributionControl: false }).setView([-6.2, 106.8], 9);
             googleHybrid = L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', { maxZoom: 18 }).addTo(map);
             googleStreets = L.tileLayer('https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', { maxZoom: 18 });
-            googleTerrain = L.tileLayer('https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}', { maxZoom: 18 });
 
             map.on('dragstart', () => { if (isSimulating || isGpsNavigating) { isMapAutoTracking = false; document.getElementById('btn-recenter').classList.remove('hidden'); } });
             map.on('click', async (e) => {
                 if (isSimulating || isGpsNavigating) return;
                 showLocationPopup(e.latlng);
             });
-            
-            map.on('zoomend', () => {
-                renderMapMarkers();
-            });
-
             renderMapMarkers();
         }
 
@@ -761,7 +748,6 @@
                 let legDist = 0, legBrg = 0;
                 if(i > 0) {
                     const prev = waypointsData.find(w => w.id === activeRouteIds[i-1]);
-                    legDist = calcDistanceNM(prev.lat, prev.lng, wp.lat, lng);
                     legDist = calcDistanceNM(prev.lat, prev.lng, wp.lat, wp.lng);
                     legBrg = calcBearing(prev.lat, prev.lng, wp.lat, wp.lng);
                 }
@@ -806,82 +792,18 @@
                 list.appendChild(div);
             });
             drawRouteLine();
-            
-            if(isRouteFocusMode) renderMapMarkers();
         }
 
         function drawRouteLine() {
             if(routePolyline) map.removeLayer(routePolyline);
             midpointMarkers.forEach(m => map.removeLayer(m)); midpointMarkers = [];
-            
             const coords = activeRouteIds.map(id => {
                 const w = waypointsData.find(x => x.id === id);
                 return w ? [w.lat, w.lng] : null;
             }).filter(c => c !== null);
-            
             if(coords.length < 2) return;
-            
-            // Create the visible route line
-            routePolyline = L.polyline(coords, { 
-                color: '#e216f2', 
-                weight: 4,
-                interactive: true // Essential for line interaction
-            }).addTo(map);
+            routePolyline = L.polyline(coords, { color: '#e216f2', weight: 4 }).addTo(map);
 
-            // Logic: Drag anywhere on line
-            routePolyline.on('mousedown', (e) => {
-                if (isSimulating || isGpsNavigating) return;
-                
-                // 1. Identify which segment was clicked
-                const point = e.latlng;
-                let minSum = Infinity;
-                let insertIdx = 1;
-                
-                for(let i=0; i<coords.length-1; i++) {
-                    const d1 = calcDistanceNM(coords[i][0], coords[i][1], point.lat, point.lng);
-                    const d2 = calcDistanceNM(coords[i+1][0], coords[i+1][1], point.lat, point.lng);
-                    const sum = d1 + d2;
-                    if(sum < minSum) {
-                        minSum = sum;
-                        insertIdx = i + 1;
-                    }
-                }
-                
-                // 2. Create a ghost draggable marker at the click location
-                const ghost = L.marker(point, {
-                    icon: L.divIcon({ className: 'route-midpoint-icon', iconSize: [12,12] }),
-                    draggable: true
-                }).addTo(map);
-                
-                // Force drag start behavior
-                ghost.dragging.enable();
-                
-                ghost.on('dragend', (ev) => {
-                    const finalPos = ev.target.getLatLng();
-                    pendingRouteInsertIndex = insertIdx;
-                    map.removeLayer(ghost);
-                    
-                    const nearby = waypointsData.filter(w => calcDistanceNM(finalPos.lat, finalPos.lng, w.lat, w.lng) < 10);
-                    if(nearby.length > 0) {
-                        openWpSelector(nearby, finalPos);
-                    } else {
-                        openAddWpPrompt(finalPos);
-                    }
-                });
-                
-                // Simulate drag initiation by binding to mousemove
-                const onMapMove = (moveEv) => {
-                    ghost.setLatLng(moveEv.latlng);
-                };
-                
-                map.on('mousemove', onMapMove);
-                map.once('mouseup', () => {
-                    map.off('mousemove', onMapMove);
-                    ghost.fire('dragend');
-                });
-            });
-
-            // Maintain traditional midpoint markers for visual aid
             for(let i=0; i<coords.length-1; i++) {
                 const mid = [(coords[i][0]+coords[i+1][0])/2, (coords[i][1]+coords[i+1][1])/2];
                 const m = L.marker(mid, { icon: L.divIcon({ className: 'route-midpoint-icon', iconSize: [12,12] }), draggable: true }).addTo(map);
@@ -898,21 +820,6 @@
             if (activeRouteIds.length < 2) return;
             activeRouteIds.reverse();
             calculateRoute();
-        }
-
-        function toggleRouteFocus() {
-            if (activeRouteIds.length < 1) return;
-            isRouteFocusMode = !isRouteFocusMode;
-            
-            const btn = document.getElementById('btn-focus-mode');
-            btn.classList.toggle('text-aviation-primary', isRouteFocusMode);
-            btn.classList.toggle('bg-slate-700', isRouteFocusMode);
-
-            if (isRouteFocusMode && routePolyline) {
-                map.fitBounds(routePolyline.getBounds(), { padding: [50, 50] });
-            }
-            
-            renderMapMarkers();
         }
 
         // --- INTERFACE SYNC ---
@@ -1015,6 +922,7 @@
                 const div = document.createElement('div');
                 div.className = "bg-slate-800 p-2.5 rounded-lg border border-slate-700 flex justify-between items-center cursor-pointer hover:border-aviation-primary transition group";
                 div.onclick = () => showAircraftForm(ac.id);
+                // logic check: PK-TWV or PK-TWZ = helicopter
                 const isHelicopter = ac.callsign.includes('PK-TWV') || ac.callsign.includes('PK-TWZ');
                 const iconClass = isHelicopter ? 'fa-solid fa-helicopter' : 'fa-solid fa-plane-up';
                 
@@ -1275,8 +1183,7 @@
         
         function toggleMapLayer() {
             if(currentMapLayer === 'hybrid') { map.removeLayer(googleHybrid); googleStreets.addTo(map); currentMapLayer = 'streets'; }
-            else if(currentMapLayer === 'streets') { map.removeLayer(googleStreets); googleTerrain.addTo(map); currentMapLayer = 'terrain'; }
-            else { map.removeLayer(googleTerrain); googleHybrid.addTo(map); currentMapLayer = 'hybrid'; }
+            else { map.removeLayer(googleStreets); googleHybrid.addTo(map); currentMapLayer = 'hybrid'; }
         }
 
         // --- SEARCH & UI ---
@@ -1367,6 +1274,7 @@
             const container = document.getElementById('saved-routes-container'); container.innerHTML = '';
             savedRoutes.forEach(r => {
                 const ac = aircraftData.find(a => a.id == r.aircraftId);
+                // Check if this specific route's aircraft is a helicopter
                 const isHelicopter = ac && (ac.callsign.includes('PK-TWV') || ac.callsign.includes('PK-TWZ'));
                 const iconClass = isHelicopter ? 'fa-solid fa-helicopter' : 'fa-solid fa-plane';
                 
@@ -1427,32 +1335,18 @@
 
         function renderMapMarkers() {
             mapMarkers.forEach(m => map.removeLayer(m)); mapMarkers = [];
-            
-            const currentZoom = map.getZoom();
-            const zoomThreshold = 11;
-
             waypointsData.forEach(wp => {
-                const isInRoute = activeRouteIds.includes(wp.id);
-                
-                let shouldShow = true;
-                if (isRouteFocusMode && currentZoom <= zoomThreshold) {
-                    if (!isInRoute) shouldShow = false;
-                }
-
-                if (shouldShow) {
-                    const t = wp.type === 'apt' ? 'wp-apt' : wp.type === 'heli' ? 'wp-heli' : 'wp-standard';
-                    const m = L.marker([wp.lat, wp.lng], { icon: L.divIcon({ className: 'bg-transparent', html: `<div class="wp-marker ${t}">${wp.type==='apt'?'<i class="fa-solid fa-plane"></i>':wp.type==='heli'?'H':''}</div>`, iconSize: [24, 24] }) })
-                        .bindTooltip(wp.name, { permanent: true, direction: 'right', className: 'wp-label', offset: [12,0] })
-                        .on('click', (e) => {
-                            L.DomEvent.stopPropagation(e);
-                            const content = `<div class="p-2 min-w-[160px] text-white"><strong class="text-aviation-primary block border-b border-slate-700 pb-1 mb-1 italic text-[11px] uppercase">${wp.name}</strong><div class="text-[10px] font-mono leading-relaxed mb-1">${formatDMSString(wp.lat, true)}<br>${formatDMSString(wp.lng, false)}</div><div class="text-[10px] font-bold text-slate-300 italic mb-2">Elev: ${wp.elev} FT</div><div class="flex gap-1"><button onclick="addWpToRouteById(${wp.id})" class="flex-1 bg-aviation-primary py-2 rounded text-[9px] font-black text-slate-900 uppercase">+ Route</button></div></div>`;
-                            L.popup().setLatLng([wp.lat, wp.lng]).setContent(content).openOn(map);
-                        }).addTo(map);
-                    mapMarkers.push(m);
-                }
+                const t = wp.type === 'apt' ? 'wp-apt' : wp.type === 'heli' ? 'wp-heli' : 'wp-standard';
+                const m = L.marker([wp.lat, wp.lng], { icon: L.divIcon({ className: 'bg-transparent', html: `<div class="wp-marker ${t}">${wp.type==='apt'?'<i class="fa-solid fa-plane"></i>':wp.type==='heli'?'H':''}</div>`, iconSize: [24, 24] }) })
+                    .bindTooltip(wp.name, { permanent: true, direction: 'right', className: 'wp-label', offset: [12,0] })
+                    .on('click', (e) => {
+                        L.DomEvent.stopPropagation(e);
+                        const content = `<div class="p-2 min-w-[160px] text-white"><strong class="text-aviation-primary block border-b border-slate-700 pb-1 mb-1 italic text-[11px] uppercase">${wp.name}</strong><div class="text-[10px] font-mono leading-relaxed mb-1">${formatDMSString(wp.lat, true)}<br>${formatDMSString(wp.lng, false)}</div><div class="text-[10px] font-bold text-slate-300 italic mb-2">Elev: ${wp.elev} FT</div><div class="flex gap-1"><button onclick="addWpToRouteById(${wp.id})" class="flex-1 bg-aviation-primary py-2 rounded text-[9px] font-black text-slate-900 uppercase">+ Route</button></div></div>`;
+                        L.popup().setLatLng([wp.lat, wp.lng]).setContent(content).openOn(map);
+                    }).addTo(map);
+                mapMarkers.push(m);
             });
         }
-
         function addWpToRouteById(id) { activeRouteIds.push(id); calculateRoute(); map.closePopup(); }
 
         function openNavlog() {
